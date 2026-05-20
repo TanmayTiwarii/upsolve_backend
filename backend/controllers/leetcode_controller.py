@@ -4,8 +4,23 @@ import os
 
 GRAPHQL_URL = os.getenv("GRAPHQL_URL", "https://leetcode.com/graphql/")
 
+HEADERS = {
+    "Content-Type": "application/json",
+    "Referer": "https://leetcode.com",
+}
+
 
 async def fetch_all_question_ids(client: httpx.AsyncClient, slugs: List[str]) -> List[int]:
+    """
+    Fetch questionFrontendId for all given slugs in a SINGLE batched GraphQL query
+    using field aliases instead of N separate requests.
+
+    Example generated query:
+        query {
+            q0: question(titleSlug: "two-sum")     { questionFrontendId }
+            q1: question(titleSlug: "rotate-image") { questionFrontendId }
+        }
+    """
     if not slugs:
         return []
 
@@ -17,12 +32,17 @@ async def fetch_all_question_ids(client: httpx.AsyncClient, slugs: List[str]) ->
     batched_query = {"query": f"query {{ {fields} }}"}
 
     try:
-        resp = await client.post(GRAPHQL_URL, json=batched_query)
+        resp = await client.post(GRAPHQL_URL, json=batched_query, headers=HEADERS)
         if resp.status_code != 200:
-            print(f"Batched question query failed with status {resp.status_code}")
+            print(f"Batched question query failed with status {resp.status_code}: {resp.text}")
             return []
 
-        data = resp.json().get("data", {})
+        body = resp.json()
+        if body.get("errors"):
+            print(f"GraphQL errors in batched query: {body['errors']}")
+
+        # data can be None if all aliases errored out — guard against that
+        data = body.get("data") or {}
         ids = []
         for i in range(len(slugs)):
             question = data.get(f"q{i}")
@@ -47,14 +67,18 @@ async def fetch_recent_problems(username: str) -> List[int]:
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(GRAPHQL_URL, json=query_recent)
+            resp = await client.post(GRAPHQL_URL, json=query_recent, headers=HEADERS)
             if resp.status_code != 200:
-                print(f"Failed to fetch recent submissions for {username}")
+                print(f"Failed to fetch recent submissions for {username}: {resp.status_code} {resp.text}")
                 return []
 
-            data = resp.json()
-            submissions = data.get("data", {}).get("recentAcSubmissionList")
+            body = resp.json()
+            if body.get("errors"):
+                print(f"GraphQL errors for recentAcSubmissions ({username}): {body['errors']}")
+
+            submissions = (body.get("data") or {}).get("recentAcSubmissionList")
             if not submissions:
+                print(f"No submissions found for user: {username}")
                 return []
 
             # Extract unique titleSlugs

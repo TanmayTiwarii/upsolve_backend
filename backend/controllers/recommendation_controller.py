@@ -1,4 +1,6 @@
 from typing import Dict, Any, List, Union
+import numpy as np
+import pandas as pd
 from controllers.leetcode_controller import fetch_recent_problems
 
 df_sim = None
@@ -17,6 +19,21 @@ def load_ml_resources():
 
     print("DEBUG: Resources loaded at startup ✅")
 
+def sanitize(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Replace inf/-inf with NaN, then fill NaN with safe defaults:
+      - string/object columns → empty string
+      - numeric columns       → 0
+    Prevents ValueError when FastAPI's json.dumps hits float('nan') or inf.
+    """
+    df = df.replace([np.inf, -np.inf], np.nan)
+    for col in df.columns:
+        if df[col].dtype == object:
+            df[col] = df[col].fillna("")
+        else:
+            df[col] = df[col].fillna(0)
+    return df
+
 async def get_similar_recommendations(username: str) -> Union[List[Dict[str, Any]], Dict[str, str]]:
     if not hybrid_recommend or df_sim is None:
         return {"error": "Resources not ready yet, please try again shortly."}
@@ -28,7 +45,7 @@ async def get_similar_recommendations(username: str) -> Union[List[Dict[str, Any
     recs = hybrid_recommend(df_sim, last_ids, top_k=5)
     if "similarity" in recs.columns:
         recs["similarity"] = recs["similarity"].round(4)
-        return recs[["id", "problem_name", "difficulty", "topics", "similarity"]].to_dict(orient="records")
+        return sanitize(recs[["id", "problem_name", "difficulty", "topics", "similarity"]]).to_dict(orient="records")
     return []
 
 async def get_diff_recommendations(username: str) -> Union[List[Dict[str, Any]], Dict[str, str]]:
@@ -40,4 +57,4 @@ async def get_diff_recommendations(username: str) -> Union[List[Dict[str, Any]],
         return {"error": "Could not fetch recent problems or user has no submissions"}
 
     recs = recommend_diff(df_diff, last_ids, top_k=5)
-    return recs[["id", "problem_name", "difficulty", "topics"]].to_dict(orient="records")
+    return sanitize(recs[["id", "problem_name", "difficulty", "topics"]]).to_dict(orient="records")
